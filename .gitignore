@@ -1,0 +1,15 @@
+# Build output and BMW's SDK (not redistributable: the Store builds on the car)
+dist/
+oap-sdk/
+*.pack
+*.log
+__pycache__/
+*.pyc
+
+# YOUR Home Assistant access: never commit these
+ha.json
+ha.*.json
+!ha.example.json
+ha_pair.json
+preview/
+node_modules/

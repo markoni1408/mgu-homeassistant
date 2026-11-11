@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Auto mit Home Assistant verbinden</title>
+<!--
+  Phone page of the Home Assistant app for the BMW MGU. GPL-3.0-or-later.
+  The pairing format follows hexlay/idrive7-custom-apps (GPL-3.0-or-later): AES-256-GCM with the key from the
+  #k= fragment of the link, over the public relay ntfy.sh. Nothing is stored on the phone.
+-->
+<style>
+  :root { color-scheme: dark; --bg:#0f1116; --card:#181b22; --line:#2a2f3a; --text:#eceff4; --dim:#9aa4b2; --acc:#4aa3ff; --ok:#3fbf7f; --bad:#ef5350; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 22px; margin: 8px 0 4px; }
+  p.sub { color: var(--dim); margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  label { display:block; font-weight:600; margin: 14px 0 6px; }
+  small { color: var(--dim); display:block; margin-top: 4px; }
+  input { width:100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background:#0c0e12; color: var(--text); font-size:16px; }
+  button { width:100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 12px; background: var(--acc); color:#04101f; font-size:17px; font-weight:700; }
+  button[disabled] { opacity:.5; }
+  #msg { margin-top: 16px; padding: 12px; border-radius: 10px; display:none; }
+  #msg.ok { display:block; background: rgba(63,191,127,.14); border:1px solid var(--ok); }
+  #msg.bad { display:block; background: rgba(239,83,80,.14); border:1px solid var(--bad); }
+  #msg.wait { display:block; background: rgba(74,163,255,.12); border:1px solid var(--acc); }
+  ul { margin: 6px 0 0 18px; padding:0; color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Auto mit Home Assistant verbinden</h1>
+  <p class="sub">Die Daten werden auf diesem Handy verschlüsselt und nur an dein Auto geschickt.</p>
+  <div class="card" id="form">
+    <label for="url">Adresse von Home Assistant</label>
+    <input id="url" type="url" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://home.example.org">
+    <small>Mit https. Die Adresse muss aus dem Internet erreichbar sein.</small>
+    <label for="token">Langzeit-Token</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="eyJ...">
+    <small>Home Assistant &gt; dein Profil &gt; Sicherheit &gt; Langzeit-Zugriffstoken.</small>
+    <label for="hook">Webhook-ID (optional)</label>
+    <input id="hook" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="leer = Fahrzeugdaten nicht senden">
+    <button id="go" type="button">An das Auto senden</button>
+    <div id="msg"></div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <b>Was passiert damit?</b>
+    <ul>
+      <li>Verschlüsselt (AES-256-GCM) mit einem Schlüssel, der nur im QR-Code und im Auto steht.</li>
+      <li>Der Weg führt über den öffentlichen Dienst ntfy.sh. Er sieht nur verschlüsselte Daten.</li>
+      <li>Auf dem Handy wird nichts gespeichert.</li>
+      <li>Schalten schaltest du nie von hier frei, nur im Auto.</li>
+    </ul>
+  </div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const RELAY = 'https://ntfy.sh/';
+  const WIRE = 'ha';
+  const C2P_INFO = 'idrive7 car->phone v1';
+  const q = new URLSearchParams(location.search);
+  const channel = q.get('channel') || '';
+  const km = location.hash.match(/k=([0-9a-f]{64})/i);
+  const keyHex = km ? km[1].toLowerCase() : '';
+  const $ = (id) => document.getElementById(id);
+  const msg = (cls, text) => { const m = $('msg'); m.className = cls; m.textContent = text; };
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const hex = (b) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, '0')).join('');
+  const unhex = (h) => new Uint8Array((h.match(/../g) || []).map((x) => parseInt(x, 16)));
+
+  if (!/^[A-Za-z0-9_]{8,80}$/.test(channel) || !keyHex) {
+    msg('bad', 'Dieser Link ist unvollständig. Bitte den QR-Code im Auto neu scannen.');
+    $('go').disabled = true;
+    return;
+  }
+
+  // phone -> car: AES-256-GCM with the pairing key itself, { type, iv, tag, data } in hex
+  async function seal(obj) {
+    const key = await crypto.subtle.importKey('raw', unhex(keyHex), 'AES-GCM', false, ['encrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const body = Object.assign({}, obj, { time: Date.now(), n: hex(crypto.getRandomValues(new Uint8Array(8))) });
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(body))));
+    return { type: WIRE + '_encrypted', iv: hex(iv), tag: hex(ct.slice(ct.length - 16)), data: hex(ct.slice(0, ct.length - 16)) };
+  }
+
+  // car -> phone: AES-256-GCM with HKDF-SHA256(key, empty salt, info)
+  async function open(wire) {
+    const base = await crypto.subtle.importKey('raw', unhex(keyHex), 'HKDF', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: enc.encode(C2P_INFO) }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    const joined = new Uint8Array([...unhex(wire.data), ...unhex(wire.tag)]);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unhex(wire.iv) }, key, joined);
+    return JSON.parse(dec.decode(pt));
+  }
+
+  // wait for the car's answer (pair_ack / pair_error), encrypted for the phone
+  function listen(sinceSec) {
+    return new Promise((resolve) => {
+      let done = false;
+      const es = new EventSource(RELAY + channel + '/sse?since=' + sinceSec);
+      const finish = (v) => { if (!done) { done = true; es.close(); resolve(v); } };
+      es.onmessage = async (e) => {
+        try {
+          const item = JSON.parse(e.data);
+          const wire = JSON.parse(item.message);
+          if (wire.type !== WIRE + '_car') return;
+          const inner = await open(wire);
+          if (inner.type === 'pair_ack') finish({ ok: true });
+          else if (inner.type === 'pair_error') finish({ ok: false, text: inner.text || 'Das Auto hat die Daten abgelehnt.' });
+        } catch (err) { /* not for us */ }
+      };
+      setTimeout(() => finish({ ok: null }), 45000);
+    });
+  }
+
+  $('go').addEventListener('click', async () => {
+    const url = $('url').value.trim(), token = $('token').value.trim(), hook = $('hook').value.trim();
+    if (!/^https?:\/\/[^\s/]+/.test(url)) return msg('bad', 'Bitte die Adresse mit https:// eingeben.');
+    if (/^http:\/\//.test(url) && !confirm('Die Adresse beginnt mit http. Das Token ginge unverschlüsselt durchs Internet. Trotzdem senden?')) return;
+    if (token.length < 20) return msg('bad', 'Das Token ist zu kurz. Bitte das ganze Langzeit-Token einfügen.');
+    $('go').disabled = true;
+    msg('wait', 'Sende an das Auto ...');
+    try {
+      const since = Math.floor(Date.now() / 1000) - 2;
+      const wire = await seal({ type: 'ha_config', url, token, webhookId: hook });
+      const r = await fetch(RELAY + channel, { method: 'POST', headers: { Title: 'MGU Home Assistant' }, body: JSON.stringify(wire) });
+      if (!r.ok) throw new Error('Relay ' + r.status);
+      msg('wait', 'Gesendet. Warte auf die Bestätigung des Autos (Seite "Verbinden" muss im Auto offen sein) ...');
+      const res = await listen(since);
+      if (res.ok === true) msg('ok', 'Das Auto hat die Zugangsdaten erhalten. Du kannst diese Seite schließen.');
+      else if (res.ok === false) { msg('bad', res.text); $('go').disabled = false; }
+      else { msg('bad', 'Keine Antwort vom Auto. Ist die Seite "Verbinden" im Auto offen und hat das Auto Internet?'); $('go').disabled = false; }
+    } catch (e) {
+      msg('bad', 'Senden fehlgeschlagen: ' + (e && e.message ? e.message : 'Fehler'));
+      $('go').disabled = false;
+    }
+    $('token').value = '';
+  });
+})();
+</script>
+</body>
+</html>
