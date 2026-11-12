@@ -4,58 +4,296 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Auto mit Home Assistant verbinden</title>
+<title>Auto mit Home Assistant verbinden | BMW iDrive 7</title>
 <!--
-  Phone page of the Home Assistant app for the BMW MGU. GPL-3.0-or-later.
-  The pairing format follows hexlay/idrive7-custom-apps (GPL-3.0-or-later): AES-256-GCM with the key from the
-  #k= fragment of the link, over the public relay ntfy.sh. Nothing is stored on the phone.
+  Phone pairing page of the Home Assistant app for the BMW MGU (iDrive 7). GPL-3.0-or-later.
+  Developed by Marko DEV (https://buymeacoffee.com/makiidrajf0).
+  End-to-end AES-256-GCM with key from #k= fragment over public relay ntfy.sh.
 -->
 <style>
-  :root { color-scheme: dark; --bg:#0f1116; --card:#181b22; --line:#2a2f3a; --text:#eceff4; --dim:#9aa4b2; --acc:#4aa3ff; --ok:#3fbf7f; --bad:#ef5350; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 520px; margin: 0 auto; padding: 20px 16px 40px; }
-  h1 { font-size: 22px; margin: 8px 0 4px; }
-  p.sub { color: var(--dim); margin: 0 0 18px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
-  label { display:block; font-weight:600; margin: 14px 0 6px; }
-  small { color: var(--dim); display:block; margin-top: 4px; }
-  input { width:100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background:#0c0e12; color: var(--text); font-size:16px; }
-  button { width:100%; margin-top: 18px; padding: 14px; border: 0; border-radius: 12px; background: var(--acc); color:#04101f; font-size:17px; font-weight:700; }
-  button[disabled] { opacity:.5; }
-  #msg { margin-top: 16px; padding: 12px; border-radius: 10px; display:none; }
-  #msg.ok { display:block; background: rgba(63,191,127,.14); border:1px solid var(--ok); }
-  #msg.bad { display:block; background: rgba(239,83,80,.14); border:1px solid var(--bad); }
-  #msg.wait { display:block; background: rgba(74,163,255,.12); border:1px solid var(--acc); }
-  ul { margin: 6px 0 0 18px; padding:0; color: var(--dim); }
+  :root {
+    color-scheme: dark;
+    --bg: #0c0e12;
+    --card: #151821;
+    --card-border: #262c3b;
+    --input-bg: #090b0e;
+    --line: #202634;
+    --text: #f0f3f8;
+    --dim: #8e9bb0;
+    --acc: #0066b1; /* BMW Blue */
+    --acc-hover: #1c85e8;
+    --acc-glow: rgba(0, 102, 177, 0.35);
+    --ok: #2ecc71;
+    --bad: #e74c3c;
+    --coffee: #ff813f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  main {
+    max-width: 500px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px 18px 48px;
+    flex: 1;
+  }
+  .top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .brand {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #4aa3ff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .lang-toggle {
+    display: flex;
+    gap: 4px;
+    background: #181c26;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .lang-btn {
+    background: transparent;
+    border: none;
+    color: var(--dim);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .lang-btn.active {
+    background: #2a3346;
+    color: #fff;
+  }
+  h1 {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-bottom: 8px;
+    color: #fff;
+  }
+  p.sub {
+    color: var(--dim);
+    font-size: 14px;
+    line-height: 1.45;
+    margin-bottom: 22px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #b0bcd0;
+    margin: 16px 0 6px;
+  }
+  label:first-of-type { margin-top: 0; }
+  small {
+    color: var(--dim);
+    font-size: 12px;
+    display: block;
+    margin-top: 5px;
+    line-height: 1.35;
+  }
+  input {
+    width: 100%;
+    padding: 13px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--card-border);
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: 15px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px var(--acc-glow);
+  }
+  button.submit {
+    width: 100%;
+    margin-top: 22px;
+    padding: 14px;
+    border: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #1c85e8 0%, #0066b1 100%);
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 102, 177, 0.4);
+    transition: transform 0.1s, opacity 0.15s;
+  }
+  button.submit:hover:not([disabled]) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 102, 177, 0.5);
+  }
+  button.submit:active:not([disabled]) {
+    transform: translateY(1px);
+  }
+  button[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  #msg {
+    margin-top: 16px;
+    padding: 14px;
+    border-radius: 10px;
+    display: none;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  #msg.ok { display: block; background: rgba(46, 204, 113, 0.15); border: 1px solid var(--ok); color: #2ecc71; }
+  #msg.bad { display: block; background: rgba(231, 76, 60, 0.15); border: 1px solid var(--bad); color: #ff7675; }
+  #msg.wait { display: block; background: rgba(0, 102, 177, 0.18); border: 1px solid #1c85e8; color: #70b5ff; }
+
+  .info-box {
+    margin-top: 18px;
+    background: #11141c;
+    border: 1px solid #1c2230;
+    border-radius: 14px;
+    padding: 16px;
+  }
+  .info-box b {
+    display: block;
+    font-size: 13px;
+    color: #d0d7e5;
+    margin-bottom: 8px;
+  }
+  ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--dim);
+    font-size: 13px;
+  }
+  ul li {
+    margin-bottom: 6px;
+    line-height: 1.4;
+  }
+  ul li:last-child { margin-bottom: 0; }
+
+  footer {
+    text-align: center;
+    padding: 24px 16px;
+    border-top: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 13px;
+  }
+  .support-container {
+    margin-bottom: 12px;
+  }
+  .coffee-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #ff813f;
+    color: #ffffff !important;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 16px;
+    border-radius: 20px;
+    transition: transform 0.15s, background 0.15s;
+    box-shadow: 0 3px 10px rgba(255, 129, 63, 0.35);
+  }
+  .coffee-btn:hover {
+    background: #e57335;
+    transform: translateY(-1px);
+  }
+  .author {
+    color: var(--dim);
+    font-size: 12px;
+  }
+  .author strong {
+    color: #e2e8f0;
+  }
 </style>
 </head>
 <body>
 <main>
-  <h1>Auto mit Home Assistant verbinden</h1>
-  <p class="sub">Die Daten werden auf diesem Handy verschlüsselt und nur an dein Auto geschickt.</p>
+  <div class="top-bar">
+    <div class="brand">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+      BMW MGU &bull; Home Assistant
+    </div>
+    <div class="lang-toggle">
+      <button type="button" class="lang-btn active" id="btn-de" onclick="setLang('de')">DE</button>
+      <button type="button" class="lang-btn" id="btn-en" onclick="setLang('en')">EN</button>
+    </div>
+  </div>
+
+  <h1 id="txt-title">Auto mit Home Assistant verbinden</h1>
+  <p class="sub" id="txt-sub">Die Daten werden auf diesem Handy verschlüsselt und direkt an dein Auto geschickt.</p>
+
   <div class="card" id="form">
-    <label for="url">Adresse von Home Assistant</label>
-    <input id="url" type="url" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://home.example.org">
-    <small>Mit https. Die Adresse muss aus dem Internet erreichbar sein.</small>
-    <label for="token">Langzeit-Token</label>
-    <input id="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="eyJ...">
-    <small>Home Assistant &gt; dein Profil &gt; Sicherheit &gt; Langzeit-Zugriffstoken.</small>
-    <label for="hook">Webhook-ID (optional)</label>
+    <label for="url" id="lbl-url">Adresse von Home Assistant</label>
+    <input id="url" type="url" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://mein-ha.example.org">
+    <small id="txt-url-hint">Mit https. Die Adresse muss für das Auto aus dem Internet erreichbar sein.</small>
+
+    <label for="token" id="lbl-token">Langzeit-Token</label>
+    <input id="token" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+    <small id="txt-token-hint">Home Assistant &gt; dein Profil &gt; Sicherheit &gt; Langlebige Zugriffs-Token.</small>
+
+    <label for="hook" id="lbl-hook">Webhook-ID (optional)</label>
     <input id="hook" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="leer = Fahrzeugdaten nicht senden">
-    <button id="go" type="button">An das Auto senden</button>
+    <small id="txt-hook-hint">Für Live-Fahrzeugdaten (Tempo, RPM, Temperaturen, Gang) an deine Automation.</small>
+
+    <button id="go" class="submit" type="button">An das Auto senden</button>
     <div id="msg"></div>
   </div>
-  <div class="card" style="margin-top:14px">
-    <b>Was passiert damit?</b>
+
+  <div class="info-box">
+    <b id="txt-info-title">Was passiert mit meinen Daten?</b>
     <ul>
-      <li>Verschlüsselt (AES-256-GCM) mit einem Schlüssel, der nur im QR-Code und im Auto steht.</li>
-      <li>Der Weg führt über den öffentlichen Dienst ntfy.sh. Er sieht nur verschlüsselte Daten.</li>
-      <li>Auf dem Handy wird nichts gespeichert.</li>
-      <li>Schalten schaltest du nie von hier frei, nur im Auto.</li>
+      <li id="txt-info-1">Ende-zu-Ende verschlüsselt (AES-256-GCM) mit dem Schlüssel, der nur im QR-Code und im Auto liegt.</li>
+      <li id="txt-info-2">Der Transport erfolgt über ntfy.sh – der Server sieht ausschließlich unentschlüsselbares Ciphertext.</li>
+      <li id="txt-info-3">Auf diesem Smartphone wird absolut nichts gespeichert oder gecacht.</li>
+      <li id="txt-info-4">Schaltberechtigungen können niemals vom Handy aktiviert werden, nur im Auto selbst.</li>
     </ul>
   </div>
 </main>
+
+<footer>
+  <div class="support-container">
+    <a href="https://buymeacoffee.com/makiidrajf0" target="_blank" rel="noopener" class="coffee-btn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20.216 6.415l-.132-.666c-.119-.597-.388-1.15-.78-1.603-.437-.504-1.026-.855-1.706-1.016-1.146-.27-7.794-.27-8.94 0-.68.161-1.269.512-1.706 1.016-.392.453-.661 1.006-.78 1.603L6.04 6.415C4.306 6.84 3 8.397 3 10.274c0 1.554.897 2.894 2.196 3.529l.732 5.093C6.19 20.655 7.747 22 9.53 22h4.94c1.783 0 3.34-1.345 3.602-3.104l.732-5.093C20.103 13.168 21 11.828 21 10.274c0-1.877-1.306-3.434-3.04-3.859h2.256zm-1.848 3.859c0 1.045-.697 1.928-1.656 2.193l-.409-2.846c.749-.187 1.353-.746 1.597-1.464.298.665.468 1.393.468 2.117z"/>
+      </svg>
+      <span>Buy Me a Coffee &bull; Marko DEV</span>
+    </a>
+  </div>
+  <div class="author">
+    Developed with passion by <strong>Marko DEV</strong> &bull; GPL-3.0 License
+  </div>
+</footer>
+
 <script>
 (() => {
   'use strict';
@@ -66,19 +304,104 @@
   const channel = q.get('channel') || '';
   const km = location.hash.match(/k=([0-9a-f]{64})/i);
   const keyHex = km ? km[1].toLowerCase() : '';
+
   const $ = (id) => document.getElementById(id);
-  const msg = (cls, text) => { const m = $('msg'); m.className = cls; m.textContent = text; };
   const enc = new TextEncoder(), dec = new TextDecoder();
   const hex = (b) => Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, '0')).join('');
   const unhex = (h) => new Uint8Array((h.match(/../g) || []).map((x) => parseInt(x, 16)));
 
+  let currentLang = 'de';
+
+  const DICT = {
+    de: {
+      title: 'Auto mit Home Assistant verbinden',
+      sub: 'Die Daten werden auf diesem Handy verschlüsselt und direkt an dein Auto geschickt.',
+      urlLabel: 'Adresse von Home Assistant',
+      urlHint: 'Mit https. Die Adresse muss für das Auto aus dem Internet erreichbar sein.',
+      tokenLabel: 'Langzeit-Token',
+      tokenHint: 'Home Assistant > dein Profil > Sicherheit > Langlebige Zugriffs-Token.',
+      hookLabel: 'Webhook-ID (optional)',
+      hookPlaceholder: 'leer = Fahrzeugdaten nicht senden',
+      hookHint: 'Für Live-Fahrzeugdaten (Tempo, RPM, Temperaturen, Gang) an deine Automation.',
+      goBtn: 'An das Auto senden',
+      infoTitle: 'Was passiert mit meinen Daten?',
+      info1: 'Ende-zu-Ende verschlüsselt (AES-256-GCM) mit dem Schlüssel, der nur im QR-Code und im Auto liegt.',
+      info2: 'Der Transport erfolgt über ntfy.sh – der Server sieht ausschließlich unentschlüsselbares Ciphertext.',
+      info3: 'Auf diesem Smartphone wird absolut nichts gespeichert oder gecacht.',
+      info4: 'Schaltberechtigungen können niemals vom Handy aktiviert werden, nur im Auto selbst.',
+      errIncomplete: 'Dieser Link ist unvollständig. Bitte den QR-Code im Auto neu scannen.',
+      errHttps: 'Bitte die Adresse mit https:// eingeben.',
+      warnHttp: 'Die Adresse beginnt mit http. Das Token ginge unverschlüsselt durchs Internet. Trotzdem senden?',
+      errTokenShort: 'Das Token ist zu kurz. Bitte das ganze Langzeit-Token einfügen.',
+      waitSending: 'Verschlüssele und sende an das Auto ...',
+      waitAck: 'Gesendet! Warte auf Bestätigung des Autos (Seite "Verbinden" muss im Auto offen sein) ...',
+      okAck: 'Erfolg! Das Auto hat die Zugangsdaten empfangen. Du kannst diese Seite schließen.',
+      errTimeout: 'Keine Antwort vom Auto. Ist die Seite "Verbinden" im Auto offen und hat das Auto Internet?',
+      errFailed: 'Senden fehlgeschlagen: '
+    },
+    en: {
+      title: 'Connect Car to Home Assistant',
+      sub: 'Credentials are encrypted on this device and delivered directly to your vehicle.',
+      urlLabel: 'Home Assistant URL',
+      urlHint: 'Must use https:// and be accessible from the internet for the car.',
+      tokenLabel: 'Long-Lived Access Token',
+      tokenHint: 'Home Assistant > your profile > Security > Long-Lived Access Tokens.',
+      hookLabel: 'Webhook ID (optional)',
+      hookPlaceholder: 'empty = do not transmit telemetry',
+      hookHint: 'For sending live vehicle data (Speed, RPM, Temp, Gear) to your automation.',
+      goBtn: 'Send to Car',
+      infoTitle: 'Security & Privacy',
+      info1: 'End-to-end encrypted (AES-256-GCM) with a key only known to the QR code and the car.',
+      info2: 'Delivered via ntfy.sh – relay servers only see undecryptable ciphertext.',
+      info3: 'Zero storage: nothing is saved, logged or cached on this phone.',
+      info4: 'Control permissions cannot be granted from this phone, only inside the car.',
+      errIncomplete: 'This link is incomplete. Please re-scan the QR code on the car display.',
+      errHttps: 'Please enter a valid URL starting with https://',
+      warnHttp: 'Address starts with http://. Token would be transmitted unencrypted. Proceed anyway?',
+      errTokenShort: 'Token is too short. Please paste the complete long-lived token.',
+      waitSending: 'Encrypting and sending to vehicle ...',
+      waitAck: 'Sent! Waiting for car confirmation (keep "Connect" screen open in the vehicle) ...',
+      okAck: 'Success! The car has safely received the credentials. You can close this page.',
+      errTimeout: 'No response from car. Is the "Connect" screen open and does the car have internet?',
+      errFailed: 'Transmission failed: '
+    }
+  };
+
+  window.setLang = function(lang) {
+    currentLang = lang;
+    $('btn-de').classList.toggle('active', lang === 'de');
+    $('btn-en').classList.toggle('active', lang === 'en');
+    const t = DICT[lang];
+    $('txt-title').textContent = t.title;
+    $('txt-sub').textContent = t.sub;
+    $('lbl-url').textContent = t.urlLabel;
+    $('txt-url-hint').textContent = t.urlHint;
+    $('lbl-token').textContent = t.tokenLabel;
+    $('txt-token-hint').textContent = t.tokenHint;
+    $('lbl-hook').textContent = t.hookLabel;
+    $('hook').placeholder = t.hookPlaceholder;
+    $('txt-hook-hint').textContent = t.hookHint;
+    $('go').textContent = t.goBtn;
+    $('txt-info-title').textContent = t.infoTitle;
+    $('txt-info-1').textContent = t.info1;
+    $('txt-info-2').textContent = t.info2;
+    $('txt-info-3').textContent = t.info3;
+    $('txt-info-4').textContent = t.info4;
+  };
+
+  const msg = (cls, text) => {
+    const m = $('msg');
+    m.className = cls;
+    m.textContent = text;
+  };
+
   if (!/^[A-Za-z0-9_]{8,80}$/.test(channel) || !keyHex) {
-    msg('bad', 'Dieser Link ist unvollständig. Bitte den QR-Code im Auto neu scannen.');
+    msg('bad', DICT[currentLang].errIncomplete);
     $('go').disabled = true;
     return;
   }
 
-  // phone -> car: AES-256-GCM with the pairing key itself, { type, iv, tag, data } in hex
+  // phone -> car: AES-256-GCM with pairing key itself
   async function seal(obj) {
     const key = await crypto.subtle.importKey('raw', unhex(keyHex), 'AES-GCM', false, ['encrypt']);
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -96,7 +419,6 @@
     return JSON.parse(dec.decode(pt));
   }
 
-  // wait for the car's answer (pair_ack / pair_error), encrypted for the phone
   function listen(sinceSec) {
     return new Promise((resolve) => {
       let done = false;
@@ -109,32 +431,42 @@
           if (wire.type !== WIRE + '_car') return;
           const inner = await open(wire);
           if (inner.type === 'pair_ack') finish({ ok: true });
-          else if (inner.type === 'pair_error') finish({ ok: false, text: inner.text || 'Das Auto hat die Daten abgelehnt.' });
-        } catch (err) { /* not for us */ }
+          else if (inner.type === 'pair_error') finish({ ok: false, text: inner.text || (currentLang === 'de' ? 'Das Auto hat die Daten abgelehnt.' : 'The car rejected the credentials.') });
+        } catch (err) { /* ignore unrelated */ }
       };
       setTimeout(() => finish({ ok: null }), 45000);
     });
   }
 
   $('go').addEventListener('click', async () => {
+    const t = DICT[currentLang];
     const url = $('url').value.trim(), token = $('token').value.trim(), hook = $('hook').value.trim();
-    if (!/^https?:\/\/[^\s/]+/.test(url)) return msg('bad', 'Bitte die Adresse mit https:// eingeben.');
-    if (/^http:\/\//.test(url) && !confirm('Die Adresse beginnt mit http. Das Token ginge unverschlüsselt durchs Internet. Trotzdem senden?')) return;
-    if (token.length < 20) return msg('bad', 'Das Token ist zu kurz. Bitte das ganze Langzeit-Token einfügen.');
+    if (!/^https?:\/\/[^\s/]+/.test(url)) return msg('bad', t.errHttps);
+    if (/^http:\/\//.test(url) && !confirm(t.warnHttp)) return;
+    if (token.length < 20) return msg('bad', t.errTokenShort);
+
     $('go').disabled = true;
-    msg('wait', 'Sende an das Auto ...');
+    msg('wait', t.waitSending);
+
     try {
       const since = Math.floor(Date.now() / 1000) - 2;
       const wire = await seal({ type: 'ha_config', url, token, webhookId: hook });
       const r = await fetch(RELAY + channel, { method: 'POST', headers: { Title: 'MGU Home Assistant' }, body: JSON.stringify(wire) });
-      if (!r.ok) throw new Error('Relay ' + r.status);
-      msg('wait', 'Gesendet. Warte auf die Bestätigung des Autos (Seite "Verbinden" muss im Auto offen sein) ...');
+      if (!r.ok) throw new Error('Relay HTTP ' + r.status);
+
+      msg('wait', t.waitAck);
       const res = await listen(since);
-      if (res.ok === true) msg('ok', 'Das Auto hat die Zugangsdaten erhalten. Du kannst diese Seite schließen.');
-      else if (res.ok === false) { msg('bad', res.text); $('go').disabled = false; }
-      else { msg('bad', 'Keine Antwort vom Auto. Ist die Seite "Verbinden" im Auto offen und hat das Auto Internet?'); $('go').disabled = false; }
+      if (res.ok === true) {
+        msg('ok', t.okAck);
+      } else if (res.ok === false) {
+        msg('bad', res.text);
+        $('go').disabled = false;
+      } else {
+        msg('bad', t.errTimeout);
+        $('go').disabled = false;
+      }
     } catch (e) {
-      msg('bad', 'Senden fehlgeschlagen: ' + (e && e.message ? e.message : 'Fehler'));
+      msg('bad', t.errFailed + (e && e.message ? e.message : 'Error'));
       $('go').disabled = false;
     }
     $('token').value = '';
