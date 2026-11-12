@@ -32,8 +32,8 @@ const MAX_TILES = 24;
 const atomicWrite = (file, text) => { const tmp = file + '.tmp-' + process.pid; fs.writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 }); fs.renameSync(tmp, file); };
 
 const DEMO = [
-    { entity: 'light.wohnzimmer', name: 'Wohnzimmer', state: 'on' },
-    { entity: 'light.kueche', name: 'Küche', state: 'off' },
+    { entity: 'light.wohnzimmer', name: 'Wohnzimmer', state: 'on', attrs: { bri: 80, caps: { bri: true, color: true, ct: true }, rgb: [255, 180, 90], kelvin: 2700 } },
+    { entity: 'light.kueche', name: 'Küche', state: 'off', attrs: { bri: 100, caps: { bri: true, color: false, ct: true }, rgb: null, kelvin: 4000 } },
     { entity: 'switch.kaffeemaschine', name: 'Kaffeemaschine', state: 'off' },
     { entity: 'scene.gute_nacht', name: 'Gute Nacht', state: 'scening' },
     { entity: 'script.ankommen', name: 'Ankommen', state: 'off' },
@@ -51,6 +51,22 @@ const DEMO_EXTRA = [
     { entity: 'sensor.aussentemperatur', name: 'Aussen', state: '14.2', unit: '°C' },
     { entity: 'binary_sensor.fenster_wohnzimmer', name: 'Fenster Wohnzimmer', state: 'off' },
 ];
+
+const COLOR_MODES = ['hs', 'xy', 'rgb', 'rgbw', 'rgbww'];
+/** What a light can do, from its Home Assistant attributes: { bri (0-100 or null), caps: { bri, color, ct }, rgb, kelvin }. */
+function lightAttrs(a) {
+    a = a || {};
+    const modes = Array.isArray(a.supported_color_modes) ? a.supported_color_modes : [];
+    let color = modes.some((m) => COLOR_MODES.indexOf(m) >= 0);
+    if (!color && Array.isArray(a.rgb_color)) color = true;
+    let ct = modes.indexOf('color_temp') >= 0 || color;
+    if (!ct && typeof a.color_temp_kelvin === 'number') ct = true;
+    let bri = modes.some((m) => m !== 'onoff');
+    if (!bri && typeof a.brightness === 'number') bri = true;
+    if (modes.length === 0 && !color && !ct && !bri) bri = true;
+    return { bri: typeof a.brightness === 'number' ? Math.round(a.brightness / 255 * 100) : null, caps: { bri, color, ct },
+        rgb: Array.isArray(a.rgb_color) ? a.rgb_color : null, kelvin: typeof a.color_temp_kelvin === 'number' ? a.color_temp_kelvin : null };
+}
 
 /** One request. Resolves { ok, status, data, error } and never rejects; the token only goes in the header. */
 function request(base, token, method, p, body) {
@@ -107,7 +123,7 @@ class HA {
             this.cfg = { control: true, entities: DEMO, webhookId: 'demo', demo: true };
             this.list = DEMO.map((d) => ({ entity: d.entity, name: d.name, confirm: !!d.confirm, allow: true }));
             this.states = {};
-            DEMO.forEach((d) => { this.states[d.entity] = { state: d.state, unit: d.unit }; });
+            DEMO.forEach((d) => { this.states[d.entity] = { state: d.state, unit: d.unit, attrs: d.attrs ? JSON.parse(JSON.stringify(d.attrs)) : null }; });
             return;
         }
         try {
@@ -143,7 +159,9 @@ class HA {
             if (!control) why = 'nur lesen';
             else if (!e.allow) why = 'nicht freigegeben';
             else if (!direct && !(guarded && e.confirm)) why = guarded ? 'gesperrt' : 'nur Anzeige';
-            return { entity: e.entity, name: e.name, domain, state, unit: s && s.unit ? s.unit : '', available, canAct: why === '', why, needsConfirm: guarded, confirm: e.confirm };
+            const attrs = s && s.attrs ? s.attrs : null, canAct = why === '';
+            return { entity: e.entity, name: e.name, domain, state, unit: s && s.unit ? s.unit : '', available, canAct, why, needsConfirm: guarded, confirm: e.confirm,
+                tune: domain === 'light' && canAct && available, light: attrs || { bri: null, caps: { bri: true, color: false, ct: false }, rgb: null, kelvin: null } };
         });
     }
 
@@ -153,7 +171,7 @@ class HA {
         for (let i = 0; i < this.list.length; i++) {
             const id = this.list[i].entity;
             const r = await request(this.cfg.url, this.cfg.token, 'GET', '/api/states/' + encodeURIComponent(id));
-            if (r.ok && r.data) this.states[id] = { state: r.data.state, unit: r.data.attributes && r.data.attributes.unit_of_measurement };
+            if (r.ok && r.data) this.states[id] = { state: r.data.state, unit: r.data.attributes && r.data.attributes.unit_of_measurement, attrs: id.indexOf('light.') === 0 ? lightAttrs(r.data.attributes) : null };
             else { fails++; last = r.error; if (r.status !== 404) break; }
         }
         this.lastPoll = Date.now();
@@ -186,6 +204,33 @@ class HA {
         this.log.info('ha service ' + t.domain + '.' + service + ' -> ' + (r.ok ? 'ok' : r.error));
         if (r.ok) await this.poll();
         return { ok: r.ok, text: r.ok ? t.name + ' geschaltet' : r.error };
+    }
+
+    /** Set a light on tile i: { bri: 1-100 } and / or { rgb: [r, g, b] } or { kelvin: 1500-6500 }. Only for lights that may be switched. Resolves { ok, text }. */
+    async light(i, d) {
+        const t = this.tiles()[i];
+        if (!t || t.domain !== 'light') return { ok: false, text: 'Kein Licht' };
+        if (!t.canAct) return { ok: false, text: t.why === 'nur lesen' ? 'Nur-Lesen-Modus: es wird nichts geschaltet' : 'Dieser Eintrag ist nicht freigegeben' };
+        const body = { entity_id: t.entity }, int = (n, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(n))));
+        if (d.bri !== undefined) body.brightness_pct = int(d.bri, 1, 100);
+        if (Array.isArray(d.rgb) && d.rgb.length === 3) body.rgb_color = d.rgb.map((c) => int(c, 0, 255));
+        else if (d.kelvin !== undefined) body.color_temp_kelvin = int(d.kelvin, 1500, 6500);
+        if (Object.keys(body).length < 2) return { ok: false, text: 'Nichts zu setzen' };
+        if (this.states[t.entity]) {
+            const s = this.states[t.entity];
+            s.state = 'on';
+            s.attrs = s.attrs || { bri: 100, caps: { bri: true, color: true, ct: true }, rgb: null, kelvin: null };
+            if (body.brightness_pct) s.attrs.bri = body.brightness_pct;
+            if (body.rgb_color) { s.attrs.rgb = body.rgb_color; s.attrs.kelvin = null; }
+            if (body.color_temp_kelvin) { s.attrs.kelvin = body.color_temp_kelvin; s.attrs.rgb = null; }
+        }
+        if (this.mode === 'demo') {
+            return { ok: true, text: t.name + ' eingestellt' };
+        }
+        const r = await request(this.cfg.url, this.cfg.token, 'POST', '/api/services/light/turn_on', body);
+        this.log.info('ha service light.turn_on -> ' + (r.ok ? 'ok' : r.error));
+        if (r.ok) await this.poll();
+        return { ok: r.ok, text: r.ok ? t.name + ' eingestellt' : r.error };
     }
 
     /** Every entity of the useful kinds, for the Geraete page: [{ entity, name, domain, state }]. */

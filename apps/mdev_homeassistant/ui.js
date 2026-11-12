@@ -29,9 +29,13 @@ function stateText(tl) {
 
 /* ---- little icons from lines and circles ---- */
 function icon(cv, G, t, tl, cx, cy, on) {
-    const c = on ? (tl.domain === 'light' ? '#f5b942' : '#4aa3ff') : G.withAlpha('#ffffff', 0.55), dim = G.withAlpha('#ffffff', 0.18);
+    let c = on ? (tl.domain === 'light' ? '#f5b942' : '#4aa3ff') : G.withAlpha('#ffffff', 0.55), dim = G.withAlpha('#ffffff', 0.18);
     const d = tl.domain;
     if (d === 'light') {
+        if (on && tl.light && Array.isArray(tl.light.rgb) && tl.light.rgb.length === 3) {
+            const [r, g, b] = tl.light.rgb;
+            c = '#' + [r, g, b].map((x) => Math.min(255, Math.max(0, Math.round(Number(x) || 0))).toString(16).padStart(2, '0')).join('');
+        }
         if (on) cv.circle(cx, cy - 2, 15, c); else cv.arc(cx, cy - 2, 12, 15, 0, 360, c);
         cv.fillRect(cx - 7, cy + 15, 14, 5, c);
         for (let i = 0; i < 8; i++) {
@@ -65,7 +69,11 @@ function tile(cv, G, t, x, y, w, h, tl, i, v, act) {
     cv.strokeRoundRect(x, y, w, h, 20, armed ? 3 : 2, armed ? (t.crit || '#ef2b2d') : on ? accent : G.withAlpha('#ffffff', 0.16));
     txt(cv, tl.name, x + 24, y + 46, 30, t.text, { font: 'bold', literal: true });
     const dimmed = !tl.available;
-    txt(cv, armed ? 'Nochmal tippen' : stateText(tl), x + 24, y + h - 26, 27, armed ? (t.crit || '#ef2b2d') : dimmed ? t.dim : on ? t.text : t.dim, L);
+    let stText = armed ? 'Nochmal tippen' : stateText(tl);
+    if (!armed && on && tl.domain === 'light' && tl.light && typeof tl.light.bri === 'number') {
+        stText = 'AN · ' + tl.light.bri + ' %';
+    }
+    txt(cv, stText, x + 24, y + h - 26, 27, armed ? (t.crit || '#ef2b2d') : dimmed ? t.dim : on ? t.text : t.dim, L);
     icon(cv, G, t, tl, x + w - 64, y + h / 2 + 2, on);
     if (tl.why && tl.why !== 'nur lesen') {
         const tw = tww(cv, tl.why, 18, L) + 22;
@@ -73,8 +81,134 @@ function tile(cv, G, t, x, y, w, h, tl, i, v, act) {
         txt(cv, tl.why, x + w - 14 - tw / 2, y + 32, 18, t.dim, { align: 'center', literal: true });
     } else if (tl.needsConfirm && tl.canAct) {
         txt(cv, 'geschützt', x + w - 20, y + 32, 18, t.warn || '#d29922', { align: 'right', literal: true });
+    } else if (tl.tune && act && act.tune) {
+        const hasColor = tl.light && tl.light.caps && tl.light.caps.color;
+        const lbl = hasColor ? 'Farbe' : 'Dimmen';
+        const bw = 82, bh = 34, bx = x + w - bw - 14, by = y + 12;
+        cv.roundRect(bx, by, bw, bh, 17, G.withAlpha('#ffffff', 0.14));
+        cv.strokeRoundRect(bx, by, bw, bh, 17, 1.5, G.withAlpha('#ffffff', 0.3));
+        txt(cv, lbl, bx + bw / 2, by + 23, 19, t.text, { align: 'center', font: 'bold', literal: true });
+        if (cv.own && cv.target && v.tuneLight == null) cv.target(bx, by, bw, bh, () => act.tune(i), 'tune' + i);
     }
-    if (cv.own && cv.target && act && act.tile && tl.available !== undefined) cv.target(x, y, w, h, () => act.tile(i), 'tile' + i);
+    if (cv.own && cv.target && act && act.tile && tl.available !== undefined && v.tuneLight == null) cv.target(x, y, w, h, () => act.tile(i), 'tile' + i);
+}
+
+const PRESET_COLORS = [
+    { name: 'Rot', rgb: [255, 59, 48], hex: '#ff3b30' },
+    { name: 'Orange', rgb: [255, 149, 0], hex: '#ff9500' },
+    { name: 'Gelb', rgb: [255, 204, 0], hex: '#ffcc00' },
+    { name: 'Gruen', rgb: [52, 199, 89], hex: '#34c759' },
+    { name: 'Tuerkis', rgb: [0, 199, 190], hex: '#00c7be' },
+    { name: 'Blau', rgb: [0, 122, 255], hex: '#007aff' },
+    { name: 'Lila', rgb: [175, 82, 222], hex: '#af52de' },
+    { name: 'Pink', rgb: [255, 45, 85], hex: '#ff2d55' },
+];
+
+const KELVIN_PRESETS = [
+    { label: 'Warmweiss (2700 K)', k: 2700, col: '#ffb366' },
+    { label: 'Neutralweiss (4000 K)', k: 4000, col: '#fff1e0' },
+    { label: 'Kaltweiss (6000 K)', k: 6000, col: '#dbe9ff' },
+];
+
+const BRI_STEPS = [
+    { label: '-10%', delta: -10 },
+    { label: '10%', val: 10 },
+    { label: '25%', val: 25 },
+    { label: '50%', val: 50 },
+    { label: '75%', val: 75 },
+    { label: '100%', val: 100 },
+    { label: '+10%', delta: 10 },
+];
+
+function drawLightModal(cv, G, t, v, act, tl, tileIdx) {
+    const on = isOn(tl);
+    const mx = 120, my = 42, mw = 1360, mh = 444;
+
+    // Dark backdrop over home tiles
+    cv.fillRect(0, 0, W, 520, G.withAlpha('#000000', 0.78));
+
+    // Card background
+    cv.roundRect(mx, my, mw, mh, 20, '#16191f');
+    cv.strokeRoundRect(mx, my, mw, mh, 20, 2, G.withAlpha('#ffffff', 0.22));
+
+    // Header
+    icon(cv, G, t, tl, mx + 50, my + 44, on);
+    txt(cv, tl.name, mx + 96, my + 42, 30, t.text, { font: 'bold', literal: true });
+    let sub = on ? 'Eingeschaltet' : 'Ausgeschaltet';
+    if (on && tl.light && typeof tl.light.bri === 'number') sub += '  ·  ' + tl.light.bri + ' % Helligkeit';
+    if (on && tl.light && tl.light.kelvin) sub += '  ·  ' + tl.light.kelvin + ' K';
+    txt(cv, sub, mx + 96, my + 68, 20, on ? '#f5b942' : t.dim, L);
+
+    // Toggle button in header
+    const togW = 160, togH = 42, togX = mx + mw - 300, togY = my + 24;
+    cv.roundRect(togX, togY, togW, togH, 21, on ? G.withAlpha('#ef2b2d', 0.25) : G.withAlpha('#3fb950', 0.25));
+    cv.strokeRoundRect(togX, togY, togW, togH, 21, 1.5, on ? '#ef2b2d' : '#3fb950');
+    txt(cv, on ? 'Ausschalten' : 'Einschalten', togX + togW / 2, togY + 27, 20, '#ffffff', { align: 'center', font: 'bold', literal: true });
+    if (cv.own && cv.target) cv.target(togX, togY, togW, togH, () => act.tile(tileIdx), 'tuneToggle');
+
+    // Close button in header
+    const clsW = 110, clsH = 42, clsX = mx + mw - 126, clsY = my + 24;
+    cv.roundRect(clsX, clsY, clsW, clsH, 21, t.accent || '#4aa3ff');
+    txt(cv, 'Fertig', clsX + clsW / 2, clsY + 27, 20, '#ffffff', { align: 'center', font: 'bold', literal: true });
+    if (cv.own && cv.target) cv.target(clsX, clsY, clsW, clsH, act.closeTune, 'tuneClose');
+
+    // Divider
+    cv.fillRect(mx + 30, my + 82, mw - 60, 1, G.withAlpha('#ffffff', 0.12));
+
+    let curY = my + 98;
+    const caps = (tl.light && tl.light.caps) || { bri: true, color: false, ct: false };
+
+    // Section 1: Helligkeit
+    if (caps.bri) {
+        txt(cv, 'HELLIGKEIT' + (tl.light && tl.light.bri != null ? ' (' + tl.light.bri + ' %)' : ''), mx + 40, curY + 16, 20, t.dim, { font: 'bold', spacing: 1.5, literal: true });
+        const bw = 140, bh = 46, bgap = 16, bx0 = mx + 40;
+        BRI_STEPS.forEach((step, k) => {
+            const bx = bx0 + k * (bw + bgap);
+            const isSel = step.val != null && tl.light && tl.light.bri != null && Math.abs(tl.light.bri - step.val) <= 6;
+            cv.roundRect(bx, curY + 28, bw, bh, 23, isSel ? G.withAlpha('#f5b942', 0.35) : G.withAlpha('#ffffff', 0.08));
+            cv.strokeRoundRect(bx, curY + 28, bw, bh, 23, isSel ? 2 : 1.5, isSel ? '#f5b942' : G.withAlpha('#ffffff', 0.2));
+            txt(cv, step.label, bx + bw / 2, curY + 28 + 29, 21, isSel ? '#ffffff' : t.text, { align: 'center', font: 'bold', literal: true });
+            const targetBri = step.val != null ? step.val : Math.min(100, Math.max(1, (tl.light && tl.light.bri ? tl.light.bri : 50) + step.delta));
+            if (cv.own && cv.target) cv.target(bx, curY + 28, bw, bh, () => act.setLight(tileIdx, { bri: targetBri }), 'tuneBri' + k);
+        });
+        curY += 92;
+    }
+
+    // Section 2: Weisstoene (Kelvin)
+    if (caps.ct) {
+        txt(cv, 'WEISSTON' + (tl.light && tl.light.kelvin ? ' (' + tl.light.kelvin + ' K)' : ''), mx + 40, curY + 16, 20, t.dim, { font: 'bold', spacing: 1.5, literal: true });
+        const kw = 340, kh = 44, kgap = 20, kx0 = mx + 40;
+        KELVIN_PRESETS.forEach((item, k) => {
+            const kx = kx0 + k * (kw + kgap);
+            const isSel = tl.light && tl.light.kelvin != null && Math.abs(tl.light.kelvin - item.k) <= 400;
+            cv.roundRect(kx, curY + 28, kw, kh, 22, isSel ? G.withAlpha(item.col, 0.32) : G.withAlpha('#ffffff', 0.08));
+            cv.strokeRoundRect(kx, curY + 28, kw, kh, 22, isSel ? 2 : 1.5, isSel ? item.col : G.withAlpha('#ffffff', 0.2));
+            cv.circle(kx + 26, curY + 28 + kh / 2, 10, item.col);
+            txt(cv, item.label, kx + 48, curY + 28 + 29, 21, isSel ? '#ffffff' : t.text, { font: 'bold', literal: true });
+            if (cv.own && cv.target) cv.target(kx, curY + 28, kw, kh, () => act.setLight(tileIdx, { kelvin: item.k }), 'tuneK' + k);
+        });
+        curY += 88;
+    }
+
+    // Section 3: Farben (RGB)
+    if (caps.color) {
+        txt(cv, 'FARBE', mx + 40, curY + 16, 20, t.dim, { font: 'bold', spacing: 1.5, literal: true });
+        const cw = 140, ch = 44, cgap = 14, cx0 = mx + 40;
+        PRESET_COLORS.forEach((c, k) => {
+            const cx = cx0 + k * (cw + cgap);
+            const cy = curY + 28;
+            const rgb = tl.light && tl.light.rgb;
+            const isSel = Array.isArray(rgb) && rgb.length === 3 && Math.abs(rgb[0] - c.rgb[0]) < 35 && Math.abs(rgb[1] - c.rgb[1]) < 35 && Math.abs(rgb[2] - c.rgb[2]) < 35;
+            cv.roundRect(cx, cy, cw, ch, 22, isSel ? G.withAlpha(c.hex, 0.38) : G.withAlpha('#ffffff', 0.08));
+            cv.strokeRoundRect(cx, cy, cw, ch, 22, isSel ? 2 : 1.5, isSel ? c.hex : G.withAlpha('#ffffff', 0.2));
+            cv.circle(cx + 22, cy + ch / 2, 11, c.hex);
+            txt(cv, c.name, cx + 42, cy + 29, 20, isSel ? '#ffffff' : t.text, { font: 'bold', literal: true });
+            if (cv.own && cv.target) cv.target(cx, cy, cw, ch, () => act.setLight(tileIdx, { rgb: c.rgb }), 'tuneCol' + k);
+        });
+    }
+
+    // Backdrop click outside modal closes it
+    if (cv.own && cv.target) cv.target(0, 0, W, 520, act.closeTune, 'tuneBackdrop');
 }
 
 function drawHome(cv, G, t, v, act, bottom) {
@@ -94,10 +228,14 @@ function drawHome(cv, G, t, v, act, bottom) {
     // bottom row: pager, status line, reload
     const by = bottom - 62;
     let bx = x0;
-    if (v.tilePages > 1) bx += G.button(cv, t, bx, by, 0, 52, 'Seite ' + (v.tilePage + 1) + '/' + v.tilePages, act.pager, { key: 'pager' }) + 22;
+    if (v.tilePages > 1) bx += G.button(cv, t, bx, by, 0, 52, 'Seite ' + (v.tilePage + 1) + '/' + v.tilePages, v.tuneLight != null ? null : act.pager, { key: 'pager' }) + 22;
     txt(cv, v.statusLine, bx, by + 36, 26, v.statusBad ? (t.crit || '#ef2b2d') : t.dim, L);
     const rw = tww(cv, 'NEU LADEN', 21, { font: 'bold', spacing: 1.5 }) + 62;
-    G.button(cv, t, W - 52 - rw, by, rw, 52, 'Neu laden', act.reload, { key: 'reload' });
+    G.button(cv, t, W - 52 - rw, by, rw, 52, 'Neu laden', v.tuneLight != null ? null : act.reload, { key: 'reload' });
+
+    if (v.tuneLight != null && v.tiles[v.tuneLight]) {
+        drawLightModal(cv, G, t, v, act, v.tiles[v.tuneLight], v.tuneLight);
+    }
 }
 
 function line(cv, G, t, x, y, w, label, value, hot) {
@@ -154,10 +292,21 @@ function drawPair(cv, G, t, v, act, bottom) {
     txt(cv, '3   Senden. Das Auto uebernimmt die Daten', x1, y0 + 174, 30, t.text, { font: 'bold', literal: true });
     txt(cv, 'Seite auf dem Handy: ' + (p.page || ''), x1, y0 + 226, 22, t.dim, L);
     txt(cv, 'Code ' + (p.code || ''), x1, y0 + 262, 22, t.dim, L);
-    const last = p.last || {};
-    const col = last.ok === true ? (t.accent2 || '#4aa3ff') : last.ok === false ? (t.crit || '#ef2b2d') : t.dim;
-    txt(cv, last.ok === null || !last.at ? (p.paired ? 'Verbunden. Neu koppeln ersetzt die Zugangsdaten.' : 'Warte auf das Handy ...') : last.text + ' (' + p.ago + ')', x1, y0 + 312, 28, col, { font: 'bold', literal: true });
-    txt(cv, 'Das Handy setzt nur Adresse, Token und Webhook-ID. Schalten gibst du nie vom Handy aus frei.', x1, y0 + 352, 20, t.dim, L);
+    // connection state: waiting / phone sent data and Home Assistant is being checked / connected / not reachable / rejected
+    const last = p.last || {}, OK = '#3fb950', BAD = t.crit || '#ef2b2d';
+    let col = t.dim, head = 'Warte auf das Handy ...', detail = 'Nach dem Scannen erscheint hier der Status.';
+    if (last.ok === false) { col = BAD; head = 'Fehler: ' + last.text; detail = 'Auf dem Handy die Eingaben pruefen und erneut senden. (' + p.ago + ')'; }
+    else if (p.paired && p.reachable === true) {
+        col = OK; head = 'Verbunden. Home Assistant erreichbar';
+        detail = (p.host || '') + '  ·  ' + p.entities + ' Eintraege  ·  Abfrage ' + p.poll + (last.ok === true ? '  ·  Daten vom Handy ' + p.ago : '');
+    } else if (p.paired && p.reachable === false) {
+        col = BAD; head = 'Handy verbunden, aber Home Assistant nicht erreichbar';
+        detail = (p.err || 'Keine Antwort von ' + (p.host || 'Home Assistant')) + (last.ok === true ? '  ·  Daten vom Handy ' + p.ago : '');
+    } else if (p.paired) { col = t.accent2 || '#4aa3ff'; head = (last.ok === true ? 'Handy verbunden. ' : '') + 'Pruefe Home Assistant ...'; detail = p.host || ''; }
+    cv.roundRect(x1, y0 + 290, 22, 22, 11, col);
+    txt(cv, head, x1 + 38, y0 + 312, 28, col, { font: 'bold', literal: true });
+    txt(cv, detail, x1 + 38, y0 + 348, 22, t.dim, L);
+    txt(cv, 'Handy setzt nur Adresse, Token, Webhook.', x0, y0 + card + 26, 20, t.dim, L);
     G.button(cv, t, x1, bottom - 62, 0, 52, 'Neu koppeln', act.resetPair, { key: 'resetpair', confirm: true });
 }
 
